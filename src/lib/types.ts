@@ -371,12 +371,6 @@ export interface SkillInstallRequest {
   scope: string
 }
 
-/** The skills one bot may use. */
-export interface BotSkillCatalog {
-  fingerprint: string
-  skills: { name: string; description: string }[]
-}
-
 /**
  * A small web app the bot built from its own data. Files live under
  * /workspace/apps/<slug>; data lives in the bot's SQLite as collections.

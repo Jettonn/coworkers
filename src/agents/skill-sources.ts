@@ -1,31 +1,43 @@
-import type { skills } from "@cloudflare/think"
-import type { BotSkillCatalog, Skill } from "@/lib/types"
+import {
+  SkillResourceNotFoundError,
+  SkillSourceError,
+  parseSkillName,
+  parseSkillResourcePath,
+} from "agents/skills"
+import type {
+  InvalidSkill,
+  ListedSkill,
+  SkillListing,
+  SkillSource,
+} from "agents/skills"
+import type { Skill } from "@/lib/types"
 import { parseSkillMd } from "./skill-fetch"
 
 /**
  * Where a bot's skills come from, for Think's `getSkills()`. Think lists
- * these before every turn and only loads a skill the model activates.
+ * these before every turn.
  *
  * Neither source reads a folder. Think's workspace source would make any
  * file written there a skill on the next turn, and a bot's shell has the
  * internet, so it could fetch one in without the user seeing it.
  */
 
-type SkillSource = skills.SkillSource
-type SkillContent = NonNullable<Awaited<ReturnType<SkillSource["load"]>>>
-type SkillResource = NonNullable<
-  Awaited<ReturnType<NonNullable<SkillSource["readResource"]>>>
->
+/** A skill as a bot's turn sees it: its steps and the files beside them. */
+export interface BotSkill {
+  name: string
+  description: string
+  body: string
+  files: { path: string; size: number }[]
+}
 
 /** What a bot needs from the hub for the skills it may use. */
 export interface InstalledSkillsPort {
-  skillCatalog(botId: string): Promise<BotSkillCatalog>
-  skillContent(botId: string, name: string): Promise<SkillContent | null>
+  botSkills(botId: string): Promise<BotSkill[]>
   skillResource(
     botId: string,
     name: string,
     path: string
-  ): Promise<SkillResource | null>
+  ): Promise<string | null>
 }
 
 /** What the user installed for this bot or for every bot. Hub-side scoping. */
@@ -33,20 +45,37 @@ export function installedSkillSource(
   hub: () => Promise<InstalledSkillsPort>,
   botId: string
 ): SkillSource {
-  let fingerprint = ""
+  const id = "installed"
   return {
-    id: "installed",
-    get fingerprint() {
-      return fingerprint
-    },
+    id,
     async list() {
-      const catalog = await (await hub()).skillCatalog(botId)
-      fingerprint = catalog.fingerprint
-      return catalog.skills
+      try {
+        return {
+          ok: true,
+          value: toListing(await (await hub()).botSkills(botId)),
+        }
+      } catch (err) {
+        return { ok: false, error: new SkillSourceError(id, "list", err) }
+      }
     },
-    load: async (name) => (await hub()).skillContent(botId, name),
-    readResource: async (name, path) =>
-      (await hub()).skillResource(botId, name, path),
+    async readResource(skill, path) {
+      let content: string | null
+      try {
+        content = await (await hub()).skillResource(botId, skill, path)
+      } catch (err) {
+        return {
+          ok: false,
+          error: new SkillSourceError(id, "read-resource", err),
+        }
+      }
+      if (content === null) {
+        return { ok: false, error: new SkillResourceNotFoundError(skill, path) }
+      }
+      return {
+        ok: true,
+        value: { path, kind: resourceKind(path), encoding: "text", content },
+      }
+    },
   }
 }
 
@@ -55,29 +84,63 @@ export function learnedSkillSource(
   saved: () => Skill[],
   read: (path: string) => Promise<string | null>
 ): SkillSource {
-  const find = (name: string) => saved().find((s) => s.slug === name)
   return {
     id: "learned",
-    get fingerprint() {
-      return saved()
-        .map((s) => `${s.slug}:${s.description}`)
-        .sort()
-        .join("|")
+    async list() {
+      const found = await Promise.all(
+        saved().map(async (skill): Promise<BotSkill | null> => {
+          const raw = await read(learnedSkillPath(skill.slug))
+          if (raw === null) return null
+          return {
+            name: skill.slug,
+            description: skill.description,
+            body: parseSkillMd(raw)?.body ?? raw,
+            files: [],
+          }
+        })
+      )
+      return { ok: true, value: toListing(found.filter((s) => s !== null)) }
     },
-    list: async () =>
-      saved().map((s) => ({ name: s.slug, description: s.description })),
-    async load(name) {
-      const skill = find(name)
-      if (!skill) return null
-      const raw = await read(learnedSkillPath(skill.slug))
-      if (raw === null) return null
-      return {
-        name: skill.slug,
-        description: skill.description,
-        body: parseSkillMd(raw)?.body ?? raw,
-      }
-    },
+    readResource: async (skill, path) => ({
+      ok: false,
+      error: new SkillResourceNotFoundError(skill, path),
+    }),
   }
+}
+
+function toListing(found: BotSkill[]): SkillListing {
+  const skills: ListedSkill[] = []
+  const invalid: InvalidSkill[] = []
+  for (const entry of found) {
+    const name = parseSkillName(entry.name)
+    if (!name.ok) {
+      invalid.push({ location: entry.name, error: name.error })
+      continue
+    }
+    skills.push({
+      skill: {
+        name: name.value,
+        description: entry.description,
+        body: entry.body,
+        metadata: {},
+        allowedTools: [],
+        extraFields: {},
+      },
+      resources: entry.files.flatMap((file) => {
+        const path = parseSkillResourcePath(file.path)
+        if (!path.ok) return []
+        return [
+          {
+            path: path.value,
+            kind: resourceKind(file.path),
+            encoding: "text" as const,
+            size: file.size,
+          },
+        ]
+      }),
+    })
+  }
+  return { skills, invalid }
 }
 
 export function learnedSkillPath(slug: string) {

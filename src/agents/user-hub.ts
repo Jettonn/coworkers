@@ -17,7 +17,6 @@ import type {
   DeskCard,
   DeskCardInput,
   HubState,
-  BotSkillCatalog,
   InstalledSkill,
   Pipeline,
   PipelineDraft,
@@ -49,7 +48,7 @@ import {
   parseSkillRef,
   skillSource,
 } from "./skill-fetch"
-import { resourceKind } from "./skill-sources"
+import type { BotSkill } from "./skill-sources"
 import { SkillStore } from "./skill-store"
 import { visibleCards } from "./desk"
 import { MAX_MEMORY_CHARS, appendFact } from "./memory"
@@ -656,52 +655,32 @@ export class UserHub extends Agent<Env, HubState> implements HubPort {
     this.setState({ ...this.state, installedSkills: this.skills.list() })
   }
 
-  /** A skill's record, if this bot may use it. */
-  private skillFor(botId: string, name: string) {
-    const skill = this.skills.get(name)
-    return skill && (!skill.bots || skill.bots.includes(botId)) ? skill : null
-  }
-
   /** Durable Object RPC: the skills a bot lists before each turn. */
-  async skillCatalog(botId: string): Promise<BotSkillCatalog> {
-    const skills = this.skills
+  async botSkills(botId: string): Promise<BotSkill[]> {
+    return this.skills
       .list()
       .filter((s) => !s.bots || s.bots.includes(botId))
-    return {
-      fingerprint: skills.map((s) => `${s.name}:${s.digest}`).join("|"),
-      skills: skills.map((s) => ({
-        name: s.name,
-        description: s.description,
-      })),
-    }
-  }
-
-  /** Durable Object RPC: a skill's instructions, when the model activates it. */
-  async skillContent(botId: string, name: string) {
-    const skill = this.skillFor(botId, name)
-    const raw = skill && this.skills.file(name, "SKILL.md")
-    if (!skill || raw === null) return null
-    return {
-      name,
-      description: skill.description,
-      body: parseSkillMd(raw)?.body ?? raw,
-      resources: this.skills
-        .files(name)
-        .filter((f) => f.path !== "SKILL.md")
-        .map((f) => ({
-          path: f.path,
-          kind: resourceKind(f.path),
-          size: f.size,
-        })),
-    }
+      .flatMap((s) => {
+        const raw = this.skills.file(s.name, "SKILL.md")
+        if (raw === null) return []
+        return [
+          {
+            name: s.name,
+            description: s.description,
+            body: parseSkillMd(raw)?.body ?? raw,
+            files: this.skills
+              .files(s.name)
+              .filter((f) => f.path !== "SKILL.md"),
+          },
+        ]
+      })
   }
 
   /** Durable Object RPC: one file bundled with a skill. */
   async skillResource(botId: string, name: string, path: string) {
-    if (!this.skillFor(botId, name)) return null
-    const content = this.skills.file(name, path)
-    if (content === null) return null
-    return { path, kind: resourceKind(path), content }
+    const skill = this.skills.get(name)
+    if (!skill || (skill.bots && !skill.bots.includes(botId))) return null
+    return this.skills.file(name, path)
   }
 
   /** Durable Object RPC: what the install_skill card put in place. */
