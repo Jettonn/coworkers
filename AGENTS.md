@@ -10,25 +10,14 @@ TanStack Start, for Workers, and especially for the `cf` CLI.
 Coworkers is a multi-bot "AI teammates" app. Each bot is a
 Durable Object with its own chat, memory, routines, computer and browser.
 
-| Piece          | Where                                                                             | Notes                                                                                                                                                                             |
-| -------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker entry   | `src/server.ts`                                                                   | Auth-checks and routes `/agents/*`, then hands off to TanStack Start. Exports the Durable Object classes.                                                                         |
-| `UserHub`      | `src/agents/user-hub.ts`                                                          | One per user. Bot directory (sidebar), bot-to-bot relay, and every MCP connection (one sign-in per user; bots call tools through `appCatalog()` / `callAppTool()`).               |
-| `BotAgent`     | `src/agents/bot-agent.ts`                                                         | One per bot (`<userId>:<botId>`). Extends `Think`. Tools, rules, routines, computer, browser. Holds no MCP connections of its own.                                                |
-| Models         | `src/lib/models.ts`, `src/agents/models.ts`                                       | Model catalog (shared) and the AI Gateway model factory. Account choice on `UserHub`, per-bot override in `BotState.model`, Workers AI fallback.                                  |
-| System prompt  | `src/agents/prompt.ts`                                                            | Stable "soul" plus per-turn context.                                                                                                                                              |
-| Desk           | `src/agents/desk.ts`, `src/routes/_app/index.tsx`, `src/components/desk-card.tsx` | Home screen of cards. Bots build them (`desk.ts`), the `UserHub` stores them (`desk_cards`) and closes approval cards once they are answered anywhere. Plan: `docs/desk-plan.md`. |
-| Skills         | `src/agents/skill-*.ts`, `src/components/skill-install.tsx`                       | Agent Skills from GitHub or `/.well-known/agent-skills/`. Installed ones live once on the `UserHub`, scoped to bots or all; bots get them from `getSkills()`. Only the user can install.  |
-| Operations     | `src/control/`                                                                    | One definition per action (bots, the browser, later `/mcp`): `runOperation` checks caller, level, approval and ceiling. Plan: `docs/mcp-plan.md`.                                 |
-| Outside agents | `src/mcp/`, `src/components/agents-settings.tsx`                                  | OAuth server, consent page (`/oauth/authorize`) and `/mcp` serving the operations to Claude Code, Codex and other MCP clients. Storage: the `OAuthStore` Durable Object.          |
-| Shared types   | `src/lib/types.ts`                                                                | Imported by both the agents and the client. No server-only imports.                                                                                                               |
-| First paint    | `src/lib/server-fns.ts`                                                           | Server functions that read a snapshot over DO RPC.                                                                                                                                |
-| Live state     | `src/lib/hub-context.tsx`, `src/routes/_app/bots.$botId.tsx`                      | `useAgent` / `useAgentChat`, browser only, inside `ClientOnly`.                                                                                                                   |
-| Thread UI      | `src/components/thread.tsx`, `computer-card.tsx`, `src/lib/message-parts.ts`      | Tool parts become Computer cards, step lists, approval cards and system events.                                                                                                   |
-| Phones and PWA | `src/components/sheet.tsx`, `src/lib/viewport.ts`, `public/manifest.json`, `public/sw.js` | Below `md`, `SplitView` panels open as Base UI Drawer sheets, `/` is the bot list (`Sidebar home`) and the Desk is `/?desk=true`. The service worker caches `/assets/*` only, never pages. Install files are on the Access bypass list.                |
+Plans: `docs/desk-plan.md` (the Desk), `docs/mcp-plan.md` (operations and `/mcp`).
 
 Things that will bite you:
 
+- **`src/lib/types.ts` is imported by both the agents and the client.** No
+  server-only imports in it.
+- **The PWA install files are on the Access bypass list.** The service worker
+  caches `/assets/*` only, never pages.
 - **`agents()` from `agents/vite` must stay in `vite.config.ts`.** It
   transforms the `@callable()` decorators. Without it dev fails with
   `SyntaxError: Invalid or unexpected token`.
@@ -68,21 +57,12 @@ Things that will bite you:
 
 ## Stack
 
-- **TanStack Start** — full-stack React on Vite, file-based routing
-- **Cloudflare Workers** as the runtime (not Node, not Pages)
-- **`cf` CLI** for dev, build, deploy and every Cloudflare resource — it is
-  the successor to Wrangler. This project has **no `wrangler.jsonc`**.
-- **`cloudflare.config.ts`** — typed project config (replaces `wrangler.jsonc`)
-- **Cloudflare Vite plugin 2.0 beta** (`@cloudflare/vite-plugin`) — runs the
-  app on workerd in dev, same as production
-- **Drizzle ORM** + **Drizzle Kit** — installed and ready; used with D1 once
-  a database is added
-- **Zod** for input validation (`drizzle-zod` for table-derived schemas)
-- **Tailwind v4** + **Kumo** (`@cloudflare/kumo`) for UI
-- **Hugeicons** (`@hugeicons/react` + `@hugeicons/core-free-icons`) — import
-  icons from `@/components/icons`, which wraps them at `1em` with the default
-  stroke. Phosphor stays installed only as Kumo's peer dependency.
-- **pnpm** as the package manager
+TanStack Start on Cloudflare Workers, configured in `cloudflare.config.ts` and
+driven by the `cf` CLI, the successor to Wrangler. This project has **no
+`wrangler.jsonc`**. Versions are in `package.json`.
+
+Import icons from `@/components/icons`, which wraps Hugeicons at `1em` with the
+default stroke. Phosphor stays installed only as Kumo's peer dependency.
 
 ## Rules that matter most
 
@@ -155,16 +135,6 @@ is only needed for deploys and remote resource commands — `cf dev`,
 
 ## Commands
 
-```bash
-pnpm dev         # cf dev   — Vite dev server on :3000, running on workerd
-pnpm build       # cf build — production build into .cloudflare/output/
-pnpm run deploy  # cf deploy — build + upload + deploy
-pnpm typecheck   # regenerate binding types, then tsc
-pnpm cf-typegen  # cf workers types → .cloudflare/types/index.d.ts
-pnpm db:generate # drizzle-kit generate (after a schema exists)
-pnpm format      # prettier
-```
-
 - Use `pnpm run deploy`, not `pnpm deploy` — the latter is a pnpm built-in
   that does something else.
 - `cf dev` and `cf build` run Vite directly and forward only `--mode`. Set
@@ -179,23 +149,6 @@ pnpm format      # prettier
 
 ## Project config — `cloudflare.config.ts`
 
-```ts
-import { bindings, defineConfig } from "cf/config"
-
-export default defineConfig({
-  worker: {
-    name: "my-app",
-    compatibilityDate: "2026-09-01",
-    compatibilityFlags: ["nodejs_compat"],
-    entrypoint: "./src/server.ts",
-    observability: { enabled: true },
-    env: {
-      // bindings go here
-    },
-  },
-})
-```
-
 - Bindings live in `worker.env`, built with `bindings.*()`.
 - Routes, crons, and queue consumers live in `worker.triggers`, built with
   `triggers.*()`.
@@ -203,8 +156,6 @@ export default defineConfig({
   and return one complete config per mode. Select with `--mode staging`.
 - Build settings (aliases, source maps, port) belong in `vite.config.ts`,
   not here.
-- When starting a real project from this template, rename `worker.name` and
-  the `name` in `package.json`.
 
 ## How bindings work
 
@@ -230,42 +181,9 @@ env.STORAGE // R2Bucket    — once you have added a STORAGE binding
 
 ### Adding a binding
 
-Load the `add-binding` skill for the full recipe. In short:
+Load the `add-binding` skill. It has the full recipe, including secrets.
 
-```bash
-# 1. create the resource (needs `cf auth login`); note the ID it prints
-cf d1 create --name my-app-db
-cf r2 buckets create --name my-app-storage
-cf kv namespaces create --title my-app-cache
-```
-
-```ts
-// 2. declare it in cloudflare.config.ts
-env: {
-  DB: bindings.d1({ name: "my-app-db", id: "<DATABASE_ID>" }),
-  STORAGE: bindings.r2({ name: "my-app-storage" }),
-  CACHE: bindings.kv({ id: "<NAMESPACE_ID>" }),
-  APP_ENV: bindings.text("production"),
-  API_KEY: bindings.secret(),
-},
-```
-
-```bash
-# 3. verify
-pnpm typecheck && cf deploy --dry-run
-```
-
-In local dev every binding is simulated on disk under `.cloudflare/state/`;
-no remote resource is touched.
-
-### Secrets
-
-- Declare each secret the Worker reads with `bindings.secret()`.
-- Local values go in `.dev.vars` (copy `.dev.vars.example`). `cf dev` warns
-  about declared secrets that are missing.
-- Production values are uploaded with a deploy:
-  `cf deploy --secrets-file <PATH>` (JSON or `.env` format). Never commit
-  that file or put secret values in `cloudflare.config.ts`.
+Never commit a secrets file or put secret values in `cloudflare.config.ts`.
 
 ## Server functions vs API routes
 
@@ -274,49 +192,13 @@ This template ships both. They are different things. Pick correctly.
 ### Server functions — `createServerFn`
 
 Use for data the **app's own UI** consumes. They are typed RPCs, not URLs.
-
-```ts
-import { createServerFn } from "@tanstack/react-start"
-
-const getServerInfo = createServerFn().handler(() => {
-  return { renderedAt: new Date().toISOString() }
-})
-
-export const Route = createFileRoute("/")({
-  loader: () => getServerInfo(),
-  component: App,
-})
-```
-
-- Called like `getServerInfo()` from a loader/component.
-- Inputs validated via `.validator(...)`.
-- No URL to think about, no manual `fetch`.
+Example: `src/lib/server-fns.ts`.
 
 ### API routes — file-based, `server.handlers`
 
-Use for **external HTTP callers**: curl, mobile apps, webhooks, anything
-that needs a stable URL + verb.
-
-```ts
-// src/routes/api/hello.ts  →  /api/hello
-import { createFileRoute } from "@tanstack/react-router"
-
-export const Route = createFileRoute("/api/hello")({
-  server: {
-    handlers: {
-      GET: ({ request }) => Response.json({ message: "Hello" }),
-      POST: async ({ request }) => {
-        const body = await request.json()
-        return Response.json(body, { status: 201 })
-      },
-    },
-  },
-})
-```
-
-- File path → URL. `src/routes/api/items.$id.ts` → `/api/items/:id`.
-- Handlers take `{ request, params }` and return a Web `Response`.
-- **No** `component` field needed if it's a pure API route.
+Use for **external HTTP callers**: curl, mobile apps, webhooks, anything that
+needs a stable URL + verb. Load the `new-api-route` skill. Example:
+`src/routes/api/hello.ts`.
 
 ### What NOT to do
 
@@ -333,34 +215,11 @@ export const Route = createFileRoute("/api/hello")({
 
 Drizzle is installed but **no database is configured**. When a feature needs
 persistence, load the `new-db-table` skill — it covers first-time setup and
-every table after that. The shape of it:
-
-1. Create the database and add the `DB` binding **with its `id`** (see
-   "Adding a binding").
-2. Create `src/db/schema.ts` (tables + `drizzle-zod` schemas) and
-   `src/db/index.ts` (`drizzle(env.DB, { schema })`).
-3. Generate and apply migrations:
-
-   ```bash
-   pnpm db:generate   # drizzle-kit writes SQL to ./drizzle/
-
-   # local — must point at the dev server's state directory
-   cf d1 migrations apply <DATABASE_ID> --local --persist-to .cloudflare/state --dir drizzle
-
-   # production
-   cf d1 migrations apply <DATABASE_ID> --dir drizzle
-   ```
-
-Notes:
+every table after that.
 
 - Migrations are **generated** by drizzle-kit and **applied** by `cf`. Never
   use `drizzle-kit push` or `drizzle-kit migrate`.
-- `cf d1 migrations apply` takes the database **UUID**; names and binding
-  names are rejected. Without `--local` it hits the **remote** database.
-- Without `--persist-to .cloudflare/state`, `--local` writes to a global
-  directory that the dev server never reads.
-- D1 is SQLite: use `text`, `int`, `real`, `blob` from
-  `drizzle-orm/sqlite-core`. No `varchar`, `serial`, or Postgres types.
+- Without `--local`, `cf d1 migrations apply` hits the **remote** database.
 
 ## Validation
 
@@ -381,10 +240,6 @@ Load a skill when the task matches — it has the exact steps.
 | `new-db-table`  | Setting up D1 + Drizzle, adding or changing tables  |
 
 Skills live in `.agents/skills/` (`.claude/skills` is a symlink to it).
-
-## Paths
-
-- `@/*` → `./src/*`
 
 ## When in doubt
 
